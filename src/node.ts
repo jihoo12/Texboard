@@ -13,6 +13,7 @@ import {
   getDotPoint,
   updateLinePath,
 } from './connections';
+import DOMPurify from 'dompurify';
 
 // ---- Drag-to-connect state (single object, easy to reset) -
 const drag: ConnectDragState = {
@@ -46,7 +47,8 @@ export function renderMath(container: HTMLElement): void {
 
   // Set content as-is. MathJax will only render text inside explicit delimiters
   // ($…$, $$…$$, \(…\), \[…\], \begin{…}); plain text is left untouched.
-  preview.innerHTML = raw;
+  const saferaw = DOMPurify.sanitize(raw);
+  preview.innerHTML = saferaw;
 
   if (typeof window.MathJax?.typesetPromise === 'function') {
     // Fast path: engine already initialised.
