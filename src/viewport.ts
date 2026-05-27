@@ -153,7 +153,6 @@ function _onKeyUp(e: KeyboardEvent): void {
 // ---- Pan gesture -------------------------------------------
 function _onPanStart(e: MouseEvent): void {
   const t      = e.target as Element;
-  const onNode = !!t.closest('.draggable-container');
   const onUI   = !!t.closest('.toolbar, .toast');
   const onDot  = !!t.closest('.node-connect-dot');
 
