@@ -1,10 +1,11 @@
 // ============================================================
 // TeX Board — node.ts
-// Handles per-node rendering, events, and lifecycle
+// Per-node rendering, events, and lifecycle.
 // ============================================================
 
-import type { Direction } from './types';
-import { showToast } from './toast';
+import type { ConnectDragState, Direction } from './types';
+import { svgCanvas }              from './canvas';
+import { showToast }              from './toast';
 import {
   removeConnectionsForNode,
   updateAllConnections,
@@ -13,60 +14,73 @@ import {
   updateLinePath,
 } from './connections';
 
-const svgCanvas = document.getElementById('svg-canvas') as unknown as SVGSVGElement;
-
-// ---- Shared drag-to-connect state (set by each dot) -------
-let activeLine:      SVGPathElement | null = null;
-let startContainer:  HTMLElement    | null = null;
-let startDir:        Direction      | null = null;
-let isDraggingConn                        = false;
+// ---- Drag-to-connect state (single object, easy to reset) -
+const drag: ConnectDragState = {
+  active:     false,
+  line:       null,
+  sourceNode: null,
+  sourceDir:  null,
+};
 
 // ---- MathJax rendering ------------------------------------
+// Uses the MathJax v3 browser CDN global (window.MathJax / window.MathJax.typesetPromise).
+// This is loaded via a <script> tag in index.html — see the comment in main.ts.
 export function renderMath(container: HTMLElement): void {
   const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!;
   const preview  = container.querySelector<HTMLDivElement>('.tex-preview')!;
-  const raw      = textarea.value;
+  const raw      = textarea.value.trim();
 
-  if (!raw.trim()) {
-    preview.innerHTML = `<span style="color:var(--text-dim);font-size:12px;">${textarea.placeholder}</span>`;
+  if (!raw) {
+    preview.innerHTML =
+      `<span style="color:var(--text-dim);font-size:12px;">${textarea.placeholder}</span>`;
     return;
   }
 
-  preview.innerHTML = raw.replace(/\n/g, '<br>');
+  // Wrap bare TeX in display-math delimiters if the user hasn't already added
+  // any themselves (\[…\], \(…\), $…$, \begin{…}).
+  const hasDelimiters = /(\\\[|\\\(|\$|\\begin\s*\{)/.test(raw);
+  preview.innerHTML = hasDelimiters ? raw : `\\[${raw}\\]`;
 
-  if (window.MathJax?.typesetPromise) {
-    window.MathJax.typesetPromise([preview]).then(() => {
-      updateAllConnections();
-    });
+  // typesetPromise is set by the MathJax CDN bundle once it finishes loading.
+  // Guard against calling it before the script has initialised.
+  if (typeof window.MathJax?.typesetPromise === 'function') {
+    window.MathJax.typesetPromise([preview]).then(updateAllConnections);
+  } else {
+    // MathJax not ready yet — retry once it signals startup complete.
+    window.MathJax = window.MathJax ?? {};
+    const original = window.MathJax.startup?.defaultReady?.bind(window.MathJax.startup);
+    if (window.MathJax.startup) {
+      window.MathJax.startup.defaultReady = () => {
+        original?.();
+        window.MathJax.typesetPromise?.([preview]).then(updateAllConnections);
+      };
+    }
   }
 }
 
-// ---- Sync preview size to the resizable textarea ----------
+// ---- Sync preview dimensions to the resizable textarea ----
 function syncPreviewSize(container: HTMLElement): void {
   const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!;
   const preview  = container.querySelector<HTMLDivElement>('.tex-preview')!;
   const wrapper  = container.querySelector<HTMLDivElement>('.editor-wrapper')!;
-  const w = textarea.offsetWidth;
-  const h = textarea.offsetHeight;
+  const { offsetWidth: w, offsetHeight: h } = textarea;
   if (w > 0 && h > 0) {
-    wrapper.style.width  = `${w}px`;
-    wrapper.style.height = `${h}px`;
-    preview.style.width  = `${w}px`;
-    preview.style.height = `${h}px`;
+    wrapper.style.width  = preview.style.width  = `${w}px`;
+    wrapper.style.height = preview.style.height = `${h}px`;
   }
 }
 
-// ---- Attach all events to a node container ----------------
+// ---- Attach all events to a freshly created node ----------
 export function attachEditorEvents(container: HTMLElement): void {
-  container.id = generateId();
+  container.id = crypto.randomUUID();
 
-  const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!;
-  const preview  = container.querySelector<HTMLDivElement>('.tex-preview')!;
-  const deleteBtn = container.querySelector<HTMLButtonElement>('.node-delete')!;
+  const textarea   = container.querySelector<HTMLTextAreaElement>('textarea')!;
+  const preview    = container.querySelector<HTMLDivElement>('.tex-preview')!;
+  const deleteBtn  = container.querySelector<HTMLButtonElement>('.node-delete')!;
   const titleInput = container.querySelector<HTMLInputElement>('.node-title')!;
-  const dots = container.querySelectorAll<HTMLElement>('.node-connect-dot');
+  const dots       = container.querySelectorAll<HTMLElement>('.node-connect-dot');
 
-  // ---- Editing mode toggle --------------------------------
+  // Editing mode toggle
   textarea.addEventListener('focus', () => container.classList.add('editing'));
   textarea.addEventListener('blur',  () => {
     container.classList.remove('editing');
@@ -74,102 +88,92 @@ export function attachEditorEvents(container: HTMLElement): void {
   });
 
   preview.addEventListener('click', () => {
-    if (isDraggingConn) return;
+    if (drag.active) return;
     container.classList.add('editing');
     textarea.focus();
   });
 
-  // ---- Resize observer ------------------------------------
-  const resizeObserver = new ResizeObserver(() => {
+  // Resize → sync preview size and redraw connections
+  new ResizeObserver(() => {
     syncPreviewSize(container);
     updateAllConnections();
-  });
-  resizeObserver.observe(textarea);
+  }).observe(textarea);
 
-  // ---- Delete button --------------------------------------
-  deleteBtn.addEventListener('click', (e: MouseEvent) => {
+  // Delete
+  deleteBtn.addEventListener('click', e => {
     e.stopPropagation();
     deleteNode(container);
   });
 
-  // ---- Title input — block drag from propagating ----------
-  titleInput.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
+  // Prevent title drag from bubbling to the node-drag handler
+  titleInput.addEventListener('mousedown', e => e.stopPropagation());
 
-  // ---- Connect dots — drag-to-connect always active -------
+  // Connect dots — drag always active (no mode toggle required)
   dots.forEach(dot => {
-    dot.addEventListener('mousedown', (e: MouseEvent) => {
+    dot.addEventListener('mousedown', e => {
       e.stopPropagation();
       e.preventDefault();
-      const dir = dot.dataset['dir'] as Direction;
-      startConnection(container, e, dir);
+      startConnectDrag(container, e as MouseEvent, dot.dataset['dir'] as Direction);
     });
   });
 
   renderMath(container);
 }
 
-// ---- Start drawing a preview connection line --------------
-function startConnection(
+// ---- Begin a preview connection line ----------------------
+function startConnectDrag(
   container: HTMLElement,
   e: MouseEvent,
-  dir: Direction
+  dir: Direction,
 ): void {
-  startContainer    = container;
-  startDir          = dir;
-  isDraggingConn    = true;
+  drag.active     = true;
+  drag.sourceNode = container;
+  drag.sourceDir  = dir;
   container.classList.add('connect-source');
   document.body.classList.add('drawing-mode');
 
-  activeLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  activeLine.setAttribute('class', 'preview-path');
-  svgCanvas.appendChild(activeLine);
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  line.setAttribute('class', 'preview-path');
+  svgCanvas.appendChild(line);
+  drag.line = line;
 
   const start = getDotPoint(container, dir);
-  updateLinePath(
-    activeLine,
-    start.x, start.y,
-    e.clientX + window.scrollX,
-    e.clientY + window.scrollY,
-    dir, null
-  );
+  updateLinePath(line, start.x, start.y,
+    e.clientX + window.scrollX, e.clientY + window.scrollY,
+    dir, null);
 }
 
-// ---- Global mousemove handler (exported for main.ts) ------
+// ---- Global mousemove (called from main.ts) ---------------
 export function onMouseMove(e: MouseEvent): void {
-  if (!isDraggingConn || !activeLine || !startContainer || !startDir) return;
+  if (!drag.active || !drag.line || !drag.sourceNode || !drag.sourceDir) return;
 
-  const start = getDotPoint(startContainer, startDir);
-  updateLinePath(
-    activeLine,
-    start.x, start.y,
-    e.clientX + window.scrollX,
-    e.clientY + window.scrollY,
-    startDir, null
-  );
+  const start = getDotPoint(drag.sourceNode, drag.sourceDir);
+  updateLinePath(drag.line, start.x, start.y,
+    e.clientX + window.scrollX, e.clientY + window.scrollY,
+    drag.sourceDir, null);
 
-  // Highlight target
   clearHovers();
   const targetDot  = (e.target as Element).closest<HTMLElement>('.node-connect-dot');
   const targetNode = (e.target as Element).closest<HTMLElement>('.draggable-container');
 
-  if (targetDot && targetDot.closest('.draggable-container') !== startContainer) {
+  if (targetDot && targetDot.closest('.draggable-container') !== drag.sourceNode) {
     targetDot.classList.add('dot-target-hover');
-  } else if (targetNode && targetNode !== startContainer) {
+  } else if (targetNode && targetNode !== drag.sourceNode) {
     targetNode.classList.add('connect-target-hover');
   }
 }
 
-// ---- Global mouseup handler (exported for main.ts) --------
+// ---- Global mouseup (called from main.ts) -----------------
 export function onMouseUp(e: MouseEvent): boolean {
-  if (!isDraggingConn || !startContainer) return false;
+  if (!drag.active || !drag.sourceNode) return false;
 
   const targetDot  = (e.target as Element).closest<HTMLElement>('.node-connect-dot');
   const targetNode = targetDot
     ? targetDot.closest<HTMLElement>('.draggable-container')
     : (e.target as Element).closest<HTMLElement>('.draggable-container');
 
-  if (targetNode && targetNode !== startContainer) {
-    finalizeConnection(startContainer, targetNode);
+  if (targetNode && targetNode !== drag.sourceNode) {
+    finalizeConnection(drag.sourceNode, targetNode);
   }
 
   cleanupDrag();
@@ -177,39 +181,32 @@ export function onMouseUp(e: MouseEvent): boolean {
 }
 
 export function isDraggingConnection(): boolean {
-  return isDraggingConn;
+  return drag.active;
 }
 
-// ---- Internal cleanup ------------------------------------
+// ---- Cleanup after a drag gesture -------------------------
 function cleanupDrag(): void {
-  if (activeLine)     { activeLine.remove(); activeLine = null; }
-  if (startContainer) {
-    startContainer.classList.remove('connect-source');
-    startContainer = null;
-  }
+  drag.line?.remove();
+  drag.sourceNode?.classList.remove('connect-source');
+  Object.assign(drag, { active: false, line: null, sourceNode: null, sourceDir: null });
   clearHovers();
-  startDir       = null;
-  isDraggingConn = false;
   document.body.classList.remove('drawing-mode');
 }
 
 function clearHovers(): void {
-  document.querySelectorAll('.connect-target-hover, .dot-target-hover').forEach(el => {
-    el.classList.remove('connect-target-hover', 'dot-target-hover');
-  });
+  document.querySelectorAll('.connect-target-hover, .dot-target-hover').forEach(el =>
+    el.classList.remove('connect-target-hover', 'dot-target-hover'),
+  );
 }
 
-// ---- Delete a node and all its connections ----------------
+// ---- Delete a node and its connections --------------------
 function deleteNode(container: HTMLElement): void {
   removeConnectionsForNode(container);
-  container.style.transition = 'opacity 0.2s, transform 0.2s';
-  container.style.opacity    = '0';
-  container.style.transform  = 'scale(0.9)';
+  Object.assign(container.style, {
+    transition: 'opacity 0.2s, transform 0.2s',
+    opacity:    '0',
+    transform:  'scale(0.9)',
+  });
   setTimeout(() => container.remove(), 200);
   showToast('Node deleted');
-}
-
-// ---- Unique ID generator ----------------------------------
-function generateId(): string {
-  return 'node_' + Math.random().toString(36).substring(2, 11);
 }

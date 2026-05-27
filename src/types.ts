@@ -11,27 +11,32 @@ export interface Point {
 
 export interface DotPair {
   fromDir: Direction;
-  toDir: Direction;
+  toDir:   Direction;
 }
 
 export interface Connection {
-  from: HTMLElement;
-  to: HTMLElement;
-  path: SVGPathElement;
+  from:      HTMLElement;
+  to:        HTMLElement;
+  path:      SVGPathElement;
   deleteBtn: SVGGElement;
-  fromDir: Direction;
-  toDir: Direction;
+  fromDir:   Direction;
+  toDir:     Direction;
 }
 
-// Augment the global Window interface to include MathJax
+/** All mutable state for an in-progress drag-to-connect gesture. */
+export interface ConnectDragState {
+  active:     boolean;
+  line:       SVGPathElement | null;
+  sourceNode: HTMLElement    | null;
+  sourceDir:  Direction      | null;
+}
+
 declare global {
   interface Window {
     MathJax: {
       typesetPromise?: (nodes: Element[]) => Promise<void>;
-      startup?: {
-        defaultReady: () => void;
-      };
-      tex?: object;
+      startup?: { defaultReady: () => void };
+      tex?:     object;
       options?: object;
     };
   }
