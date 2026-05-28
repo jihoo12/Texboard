@@ -1,6 +1,6 @@
 # TeX Board
 
-A minimal infinite-canvas whiteboard for writing and connecting LaTeX nodes. Built with TypeScript and Vite; renders math via MathJax 4.
+A minimal infinite-canvas whiteboard for writing and connecting LaTeX and Code nodes. Built with TypeScript and Vite; renders math via MathJax 4.
 
 ![Solarized Light theme with two nodes connected by a Bézier curve](image.png)
 
