@@ -25,8 +25,6 @@ export interface Connection {
    * When true, the next updateAllConnections() call will re-run
    * getBestDotPair (16 getBoundingClientRect calls).
    * When false, the cached fromDir/toDir are reused (2 calls).
-   * Set to true whenever a connected node moves, resizes, or the
-   * viewport is panned/zoomed.
    */
   dirtyDots: boolean;
 }
@@ -35,16 +33,27 @@ export interface Connection {
 
 /** Serialisable snapshot of one node. */
 export interface NodeRecord {
-  id:      string;   // UUID — used to re-wire connections on load
-  title:   string;
-  content: string;   // raw textarea text
-  x:       number;   // canvas-local left px
-  y:       number;   // canvas-local top  px
-  width:   number;   // editor-wrapper width  px
-  height:  number;   // editor-wrapper height px
+  id:       string;
+  title:    string;
+  content:  string;   // raw textarea text
+  x:        number;   // canvas-local left px
+  y:        number;   // canvas-local top  px
+  width:    number;   // editor-wrapper width  px
+  height:   number;   // editor-wrapper height px
+  groupId?: string;   // id of the parent group, if the node belongs to one
 }
 
-/** Serialisable snapshot of one connection. */
+/** Serialisable snapshot of one group. */
+export interface GroupRecord {
+  id:     string;
+  title:  string;
+  x:      number;   // canvas-local left px
+  y:      number;   // canvas-local top  px
+  width:  number;   // px
+  height: number;   // px
+}
+
+/** Serialisable snapshot of one connection (node ↔ node, node ↔ group, or group ↔ group). */
 export interface ConnectionRecord {
   fromId: string;
   toId:   string;
@@ -55,6 +64,11 @@ export interface BoardData {
   version:     1;
   nodes:       NodeRecord[];
   connections: ConnectionRecord[];
+  /**
+   * Groups array.  Absent in boards saved before the groups feature was
+   * added — loadBoard defaults it to [] for backward compatibility.
+   */
+  groups:      GroupRecord[];
 }
 
 /** All mutable state for an in-progress drag-to-connect gesture. */

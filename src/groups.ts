@@ -40,3 +40,12 @@ export function onGroupDeleted(group: HTMLElement): void {
     delete n.dataset['groupId'];
   });
 }
+
+/**
+ * Wipe the entire membership map.
+ * Called by loadBoard before rebuilding the canvas from a JSON snapshot,
+ * after all existing DOM elements have been removed.
+ */
+export function clearAllGroups(): void {
+  _membership.clear();
+}

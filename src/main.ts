@@ -16,7 +16,7 @@ import {
 import { attachEditorEvents, attachDotEvents, onMouseMove, onMouseUp } from './node';
 import { initViewport, zoomBy, resetView, screenToCanvas, getScale } from './viewport';
 import { exportBoard, loadBoard } from './persistence';
-import { onGroupDeleted }     from './groups';
+import { onGroupDeleted } from './groups';
 
 // ---- DOM refs -----------------------------------------------
 const workspace   = document.getElementById('workspace')      as HTMLDivElement;
@@ -91,6 +91,7 @@ loadBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
   const file = fileInput.files?.[0];
   if (!file) return;
+  // Reset so the same file can be re-loaded if needed.
   fileInput.value = '';
 
   const reader = new FileReader();
@@ -103,9 +104,12 @@ fileInput.addEventListener('change', () => {
       return;
     }
 
-    const err = loadBoard(parsed, canvasLayer, nodeTemplate, () => {
-      const label = nodeLabel(nodeCounter++);
-      return label;
+    const err = loadBoard(parsed, canvasLayer, {
+      nodeTemplate,
+      groupTemplate,
+      getNextLabel:      () => nodeLabel(nodeCounter++),
+      getNextGroupLabel: () => nodeLabel(groupCounter++),
+      attachGroupEvents,
     });
 
     if (err) {
@@ -175,18 +179,18 @@ function addGroup(): void {
 function attachGroupEvents(container: HTMLElement): void {
   container.id = crypto.randomUUID();
 
-  const titleInput    = container.querySelector<HTMLInputElement>('.group-title')!;
-  const deleteBtn     = container.querySelector<HTMLButtonElement>('.group-delete')!;
-  const resizeHandle  = container.querySelector<HTMLElement>('.group-resize-handle')!;
+  const titleInput   = container.querySelector<HTMLInputElement>('.group-title')!;
+  const deleteBtn    = container.querySelector<HTMLButtonElement>('.group-delete')!;
+  const resizeHandle = container.querySelector<HTMLElement>('.group-resize-handle')!;
 
-  // Prevent title clicks from bubbling to the drag handler.
+  // Prevent title mousedown from bubbling to the drag handler in nodeDrag.ts.
   titleInput.addEventListener('mousedown', e => e.stopPropagation());
 
   // ── Delete ──────────────────────────────────────────────
   deleteBtn.addEventListener('click', e => {
     e.stopPropagation();
-    onGroupDeleted(container);           // clear group membership map
-    removeConnectionsForNode(container); // remove all connections to/from the group
+    onGroupDeleted(container);           // clear membership map entries
+    removeConnectionsForNode(container); // remove connections to/from this group
     Object.assign(container.style, {
       transition: 'opacity 0.2s, transform 0.2s',
       opacity:    '0',
@@ -197,18 +201,14 @@ function attachGroupEvents(container: HTMLElement): void {
   });
 
   // ── Connection dots ──────────────────────────────────────
-  // Reuse the same dot-wiring helper used by nodes.
   attachDotEvents(container);
 
-  // ── Resize handle ────────────────────────────────────────
-  // Native CSS resize (resize:both) requires overflow:hidden, which clips the
-  // connection dots that sit -7px outside the border.  Instead we use a tiny
-  // custom handle in the bottom-right corner and implement resize in JS.
-  let resizing   = false;
+  // ── Resize handle (custom JS — avoids overflow:hidden clipping dots) ──
+  let resizing = false;
   let startX = 0, startY = 0, startW = 0, startH = 0;
 
   resizeHandle.addEventListener('mousedown', e => {
-    e.stopPropagation();   // don't trigger node/group drag
+    e.stopPropagation();
     e.preventDefault();
     resizing = true;
     startX   = e.clientX;
@@ -225,7 +225,6 @@ function attachGroupEvents(container: HTMLElement): void {
     const dH = (e.clientY - startY) / s;
     container.style.width  = `${Math.max(300, startW + dW)}px`;
     container.style.height = `${Math.max(180, startH + dH)}px`;
-    // Dot positions change with size — mark all connections dirty.
     markConnectionsDirty(container);
     scheduleConnectionUpdate();
   });
@@ -248,7 +247,7 @@ document.addEventListener('mouseup',   (e: MouseEvent) => {
 document.addEventListener('keydown', (e: KeyboardEvent) => {
   const tag = (e.target as HTMLElement).tagName;
 
-  // Ctrl+S — export
+  // Ctrl+S — export (works even inside text fields)
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault();
     exportBtn.click();
@@ -274,6 +273,7 @@ function randomBetween(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min)) + min;
 }
 
+/** Converts a 1-based counter to a spreadsheet-style label: 1→A, 27→AA … */
 function nodeLabel(n: number): string {
   let label = '';
   let num   = n;
@@ -327,14 +327,10 @@ function groupTemplate(label: string): string {
       </button>
     </div>
     <div class="group-body-hint">Drop nodes here</div>
-
-    <!-- Four connection dots — same as nodes, positioned on each edge -->
     <div class="node-connect-dot" data-dir="top"></div>
     <div class="node-connect-dot" data-dir="right"></div>
     <div class="node-connect-dot" data-dir="bottom"></div>
     <div class="node-connect-dot" data-dir="left"></div>
-
-    <!-- Custom resize handle (bottom-right corner) -->
     <div class="group-resize-handle" title="Resize group">
       <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
         <path d="M9 2L2 9M9 5.5L5.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
